@@ -59,6 +59,8 @@ class ToolChainHandler:
         Yields:
             响应文本片段或工具执行状态
         """
+        import asyncio
+        
         # 构建完整消息列表
         full_messages: List[Message] = []
         if system_message:
@@ -74,13 +76,25 @@ class ToolChainHandler:
             iteration += 1
             logger.debug(f"工具调用链迭代 {iteration}/{self.max_iterations}")
             
-            # 调用 LLM（带工具）
-            result = await self.llm.agenerate_with_tools(full_messages, tools)
+            try:
+                # 调用 LLM（带工具）
+                result = await self.llm.agenerate_with_tools(full_messages, tools)
+            except asyncio.CancelledError:
+                logger.info("工具调用被取消")
+                raise
+            except Exception as e:
+                logger.error(f"LLM 调用失败: {e}")
+                yield f"\n[LLM 调用错误: {e}]"
+                return
             
             if not result.is_tool_call:
                 # 没有工具调用，流式输出最终响应
-                async for chunk in self.llm.astream(full_messages):
-                    yield chunk
+                try:
+                    async for chunk in self.llm.astream(full_messages):
+                        yield chunk
+                except asyncio.CancelledError:
+                    logger.info("流式输出被取消")
+                    raise
                 return
             
             # 处理工具调用
