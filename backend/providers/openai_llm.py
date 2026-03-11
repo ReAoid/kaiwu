@@ -11,8 +11,8 @@ from typing import Any, AsyncGenerator, Dict, Generator, List, Optional
 from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageToolCall
 
-from ..core.llm import Llm
-from ..core.message import Message
+from core.llm import Llm
+from core.message import Message
 
 
 @dataclass

@@ -5,9 +5,9 @@
 
 from typing import Optional
 
-from ..config.paths import CONFIG_DIR
-from ..config.settings import Settings
-from ..providers.openai_llm import OpenaiLlm
+from config.paths import CONFIG_DIR
+from config.settings import Settings
+from providers.openai_llm import OpenaiLlm
 
 
 def get_llm(settings: Optional[Settings] = None) -> OpenaiLlm:
