@@ -37,23 +37,49 @@ class Settings(BaseSettings):
     app_name: str = "Kaiwu"
 
     @classmethod
-    def load_from_file(cls, config_path: Optional[Path] = None) -> "Settings":
-        """Load settings from JSON config file.
+    def load_from_file(cls, config_path: Optional[Path] = None, secrets_path: Optional[Path] = None) -> "Settings":
+        """Load settings from config.json and secrets.json.
         
-        If the config file doesn't exist, creates it with default values.
+        config.json: General settings (can be committed to git)
+        secrets.json: Sensitive settings like API keys (should not be committed)
+        
+        secrets.json takes precedence over config.json for overlapping keys.
         """
         if config_path is None:
             config_path = CONFIG_DIR / "config.json"
+        if secrets_path is None:
+            secrets_path = CONFIG_DIR / "secrets.json"
         
-        if not config_path.exists():
-            # Create default config
+        config_data = {}
+        
+        # Load general config
+        if config_path.exists():
+            config_data = json.loads(config_path.read_text(encoding="utf-8"))
+        
+        # Load and merge secrets (takes precedence)
+        if secrets_path.exists():
+            secrets_data = json.loads(secrets_path.read_text(encoding="utf-8"))
+            config_data = cls._deep_merge(config_data, secrets_data)
+        
+        if not config_data:
+            # No config files exist, create defaults
             default_settings = cls()
             config_path.parent.mkdir(parents=True, exist_ok=True)
             config_path.write_text(
-                json.dumps(default_settings.model_dump(), indent=2, ensure_ascii=False),
+                json.dumps(default_settings.model_dump(exclude={"chat_llm"}), indent=2, ensure_ascii=False),
                 encoding="utf-8"
             )
             return default_settings
         
-        config_data = json.loads(config_path.read_text(encoding="utf-8"))
         return cls.model_validate(config_data)
+    
+    @staticmethod
+    def _deep_merge(base: dict, override: dict) -> dict:
+        """Deep merge two dictionaries, override takes precedence."""
+        result = base.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = Settings._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
