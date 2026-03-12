@@ -3,5 +3,9 @@
     "debug": true,
     "log_level": "INFO"
   },
+  "web_search": {
+    "default_provider": "duckduckgo",
+    "timeout": 30
+  },
   "app_name": "Kaiwu"
 }

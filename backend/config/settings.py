@@ -30,10 +30,30 @@ class SystemConfig(BaseModel):
     log_level: str = "INFO"
 
 
+class GoogleSearchConfig(BaseModel):
+    """Google Custom Search API configuration."""
+    api_key: Optional[str] = None
+    search_engine_id: Optional[str] = None  # cx parameter
+
+
+class BingSearchConfig(BaseModel):
+    """Bing Web Search API configuration."""
+    api_key: Optional[str] = None
+
+
+class WebSearchConfig(BaseModel):
+    """Web search configuration."""
+    default_provider: str = "duckduckgo"  # duckduckgo, google, bing
+    timeout: int = 30
+    google: GoogleSearchConfig = Field(default_factory=GoogleSearchConfig)
+    bing: BingSearchConfig = Field(default_factory=BingSearchConfig)
+
+
 class Settings(BaseSettings):
     """Global application settings."""
     chat_llm: ChatLLMConfig = Field(default_factory=ChatLLMConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
+    web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     app_name: str = "Kaiwu"
 
     @classmethod
