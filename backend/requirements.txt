@@ -7,5 +7,11 @@ pyyaml>=6.0.0
 # Web tools dependencies
 html2text>=2024.2.26
 
+# Image processing (optional, for enhanced image analysis)
+Pillow>=10.0.0
+
+# OCR dependencies (optional)
+pytesseract>=0.3.10
+
 # Test dependencies
 pytest

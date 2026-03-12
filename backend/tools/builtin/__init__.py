@@ -8,6 +8,7 @@ from tools.builtin.process_manager import ProcessManagerTool
 from tools.builtin.web_search import WebSearchTool
 from tools.builtin.web_fetch import WebFetchTool
 from tools.builtin.code_edit import CodeEditTool
+from tools.builtin.image_tool import ImageTool
 
 __all__ = [
     "FileReadTool",
@@ -18,4 +19,5 @@ __all__ = [
     "WebSearchTool",
     "WebFetchTool",
     "CodeEditTool",
+    "ImageTool",
 ]
