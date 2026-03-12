@@ -7,5 +7,11 @@
     "default_provider": "duckduckgo",
     "timeout": 30
   },
+  "tool_policy": {
+    "profile": null,
+    "allow": [],
+    "deny": [],
+    "owner_only": []
+  },
   "app_name": "Kaiwu"
 }

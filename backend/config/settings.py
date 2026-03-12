@@ -1,12 +1,57 @@
 """Configuration management using Pydantic."""
 import json
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Set
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
 from .paths import CONFIG_DIR
+
+
+class ToolPolicyConfig(BaseModel):
+    """工具策略配置
+    
+    控制哪些工具可用，支持白名单/黑名单模式。
+    
+    Attributes:
+        profile: 预定义配置文件 (minimal, coding, full, safe)
+        allow: 白名单 - 只允许这些工具（空数组=未启用，支持分组如 group:fs）
+        deny: 黑名单 - 禁止这些工具（空数组=未启用）
+        owner_only: 仅所有者可用的工具列表
+    
+    优先级规则（从高到低）:
+    1. deny (黑名单) - 最高优先级，无论其他规则如何，黑名单中的工具一定被禁止
+    2. allow (白名单) - 如果启用，只有白名单中的工具才允许使用
+    3. profile - 最低优先级，作为基础配置
+    
+    同时配置 allow 和 deny 的行为:
+    - 工具在 deny 中 → 禁止（黑名单优先）
+    - 工具在 allow 中但不在 deny 中 → 允许
+    - 工具不在 allow 中 → 禁止（白名单生效时）
+    
+    示例配置:
+    ```json
+    {
+      "tool_policy": {
+        "allow": ["file_read", "file_write", "bash_exec"],
+        "deny": ["bash_exec"]
+      }
+    }
+    ```
+    结果: file_read ✓, file_write ✓, bash_exec ✗ (黑名单优先)
+    
+    可用分组:
+    - group:fs - 文件操作 (file_read, file_write, file_delete)
+    - group:runtime - 运行时 (bash_exec, process_manager)
+    - group:web - 网络 (web_search, web_fetch)
+    - group:media - 媒体 (image_tool, pdf_tool, tts_tool)
+    - group:code - 代码 (code_edit)
+    """
+    profile: Optional[str] = None  # minimal, coding, full, safe
+    allow: List[str] = Field(default_factory=list)  # 空数组=未启用白名单
+    deny: List[str] = Field(default_factory=list)   # 空数组=未启用黑名单
+    owner_only: List[str] = Field(default_factory=list)
 
 
 class LLMApiConfig(BaseModel):
@@ -54,6 +99,7 @@ class Settings(BaseSettings):
     chat_llm: ChatLLMConfig = Field(default_factory=ChatLLMConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    tool_policy: ToolPolicyConfig = Field(default_factory=ToolPolicyConfig)
     app_name: str = "Kaiwu"
 
     @classmethod
@@ -103,3 +149,51 @@ class Settings(BaseSettings):
             else:
                 result[key] = value
         return result
+
+
+    def get_tool_policy(self) -> "ToolPolicy":
+        """从配置创建 ToolPolicy 对象
+        
+        优先级规则:
+        1. deny (黑名单) - 最高优先级
+        2. allow (白名单) - 次优先级
+        3. profile - 基础配置
+        
+        空数组 [] 表示未启用该规则。
+        
+        Returns:
+            配置的 ToolPolicy 实例
+        """
+        from tools.policy import ToolPolicy, TOOL_PROFILES
+        
+        config = self.tool_policy
+        
+        # 如果指定了 profile，从 profile 开始
+        if config.profile:
+            if config.profile not in TOOL_PROFILES:
+                raise ValueError(f"未知的工具配置文件: {config.profile}")
+            policy = ToolPolicy.from_profile(config.profile)
+        else:
+            policy = ToolPolicy()
+        
+        # 应用 allow 覆盖（空数组=未启用，None=允许所有）
+        if config.allow:  # 非空数组才启用白名单
+            policy.allow = config.allow.copy()
+        # 如果 allow 是空数组，保持 policy.allow = None（允许所有）
+        
+        # 应用 deny 覆盖（空数组=未启用）
+        if config.deny:  # 非空数组才启用黑名单
+            if policy.deny is None:
+                policy.deny = config.deny.copy()
+            else:
+                # 合并黑名单
+                existing = set(policy.deny)
+                for tool in config.deny:
+                    if tool not in existing:
+                        policy.deny.append(tool)
+        
+        # 应用 owner_only
+        if config.owner_only:
+            policy.owner_only_tools = set(config.owner_only)
+        
+        return policy
