@@ -9,6 +9,7 @@ from tools.builtin.web_search import WebSearchTool
 from tools.builtin.web_fetch import WebFetchTool
 from tools.builtin.code_edit import CodeEditTool
 from tools.builtin.image_tool import ImageTool
+from tools.builtin.pdf_tool import PDFTool
 
 __all__ = [
     "FileReadTool",
@@ -20,4 +21,5 @@ __all__ = [
     "WebFetchTool",
     "CodeEditTool",
     "ImageTool",
+    "PDFTool",
 ]

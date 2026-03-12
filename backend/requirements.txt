@@ -13,5 +13,10 @@ Pillow>=10.0.0
 # OCR dependencies (optional)
 pytesseract>=0.3.10
 
+# PDF processing (optional, for PDF text extraction)
+# PyMuPDF is preferred, pypdf is fallback
+pymupdf>=1.24.0
+pypdf>=4.0.0
+
 # Test dependencies
 pytest
