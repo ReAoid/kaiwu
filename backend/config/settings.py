@@ -9,6 +9,43 @@ from pydantic_settings import BaseSettings
 from .paths import CONFIG_DIR
 
 
+class FSPolicyConfig(BaseModel):
+    """文件系统策略配置
+    
+    控制文件系统访问权限，读取和写入/删除权限分开控制。
+    支持 glob 模式匹配 (*, ?, [], **)。
+    
+    Attributes:
+        read_allowed_paths: 允许读取的路径白名单（空=不限制）
+        read_denied_paths: 禁止读取的路径黑名单
+        write_allowed_paths: 允许写入/删除的路径白名单（空=不限制）
+        write_denied_paths: 禁止写入/删除的路径黑名单
+    
+    示例配置:
+    ```json
+    {
+      "fs_policy": {
+        "read_allowed_paths": [],
+        "read_denied_paths": [".env", ".env.*", "*.key", "secrets/", "~/.ssh/"],
+        "write_allowed_paths": [],
+        "write_denied_paths": [".git/", "*-lock.json", "*.lock"]
+      }
+    }
+    ```
+    
+    Glob 模式:
+    - `*`: 匹配任意字符
+    - `?`: 匹配单个字符
+    - `[seq]`: 匹配字符集
+    - `**`: 匹配任意层级目录
+    - `dir/`: 匹配目录及其所有内容
+    """
+    read_allowed_paths: List[str] = Field(default_factory=list)
+    read_denied_paths: List[str] = Field(default_factory=list)
+    write_allowed_paths: List[str] = Field(default_factory=list)
+    write_denied_paths: List[str] = Field(default_factory=list)
+
+
 class ToolPolicyConfig(BaseModel):
     """工具策略配置
     
@@ -100,6 +137,7 @@ class Settings(BaseSettings):
     system: SystemConfig = Field(default_factory=SystemConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     tool_policy: ToolPolicyConfig = Field(default_factory=ToolPolicyConfig)
+    fs_policy: FSPolicyConfig = Field(default_factory=FSPolicyConfig)
     app_name: str = "Kaiwu"
 
     @classmethod
@@ -197,3 +235,20 @@ class Settings(BaseSettings):
             policy.owner_only_tools = set(config.owner_only)
         
         return policy
+
+    def get_fs_policy(self) -> "FSPolicy":
+        """从配置创建 FSPolicy 对象
+        
+        Returns:
+            配置的 FSPolicy 实例
+        """
+        from tools.fs_policy import FSPolicy
+        
+        config = self.fs_policy
+        
+        return FSPolicy(
+            read_allowed_paths=config.read_allowed_paths if config.read_allowed_paths else None,
+            read_denied_paths=config.read_denied_paths if config.read_denied_paths else None,
+            write_allowed_paths=config.write_allowed_paths if config.write_allowed_paths else None,
+            write_denied_paths=config.write_denied_paths if config.write_denied_paths else None,
+        )

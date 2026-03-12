@@ -13,5 +13,11 @@
     "deny": [],
     "owner_only": []
   },
+  "fs_policy": {
+    "read_allowed_paths": [],
+    "read_denied_paths": [".env", ".env.*", "*.key", "*.pem", "secrets/", "~/.ssh/", "~/.aws/"],
+    "write_allowed_paths": [],
+    "write_denied_paths": [".git/", "*-lock.json", "*.lock"]
+  },
   "app_name": "Kaiwu"
 }
