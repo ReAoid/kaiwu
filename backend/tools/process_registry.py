@@ -10,7 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 class ProcessStatus(Enum):
@@ -19,6 +19,11 @@ class ProcessStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     KILLED = "killed"
+    UNKNOWN = "unknown"  # 进程状态未知（如进程对象丢失）
+
+
+# 状态变更回调类型
+StatusChangeCallback = Callable[["ProcessSession", ProcessStatus, ProcessStatus], None]
 
 
 @dataclass
@@ -40,6 +45,9 @@ class ProcessSession:
         truncated: 输出是否被截断
         backgrounded: 是否已后台化
         max_output_chars: 最大输出字符数
+        last_status_check: 最后状态检查时间戳
+        status_history: 状态变更历史 [(timestamp, old_status, new_status)]
+        _pty_master_fd: PTY 主端文件描述符（仅 PTY 模式）
     """
     id: str
     command: str
@@ -55,13 +63,19 @@ class ProcessSession:
     truncated: bool = False
     backgrounded: bool = False
     max_output_chars: int = 100000
+    last_status_check: float = field(default_factory=time.time)
+    status_history: List[Tuple[float, ProcessStatus, ProcessStatus]] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _output_thread: Optional[threading.Thread] = None
+    _pty_master_fd: Optional[int] = None
     
     def __post_init__(self):
         # 确保 lock 存在
         if not hasattr(self, '_lock') or self._lock is None:
             object.__setattr__(self, '_lock', threading.Lock())
+        # 初始化 last_status_check
+        if self.last_status_check == 0:
+            self.last_status_check = time.time()
 
 
 @dataclass
@@ -94,6 +108,7 @@ class ProcessRegistry:
     """进程注册表
     
     管理所有后台运行的进程，提供进程状态查询、输出日志读取等功能。
+    支持状态变更回调和主动状态轮询。
     """
     
     # 默认配置
@@ -101,6 +116,7 @@ class ProcessRegistry:
     MIN_JOB_TTL_MS = 60 * 1000  # 1 分钟
     MAX_JOB_TTL_MS = 3 * 60 * 60 * 1000  # 3 小时
     DEFAULT_MAX_OUTPUT_CHARS = 100000
+    STATUS_CHECK_INTERVAL_MS = 1000  # 状态检查间隔（毫秒）
     
     def __init__(self, job_ttl_ms: Optional[int] = None):
         """初始化进程注册表
@@ -114,6 +130,9 @@ class ProcessRegistry:
         self._job_ttl_ms = self._clamp_ttl(job_ttl_ms)
         self._sweeper_thread: Optional[threading.Thread] = None
         self._sweeper_stop_event = threading.Event()
+        self._status_callbacks: List[StatusChangeCallback] = []
+        self._status_monitor_thread: Optional[threading.Thread] = None
+        self._status_monitor_stop_event = threading.Event()
     
     def _clamp_ttl(self, value: Optional[int]) -> int:
         """限制 TTL 值在有效范围内"""
@@ -129,6 +148,284 @@ class ProcessRegistry:
             with self._lock:
                 if session_id not in self._running_sessions and session_id not in self._finished_sessions:
                     return session_id
+    
+    # ==================== 状态追踪方法 ====================
+    
+    def register_status_callback(self, callback: StatusChangeCallback) -> None:
+        """注册状态变更回调
+        
+        当进程状态发生变化时，回调函数会被调用。
+        
+        Args:
+            callback: 回调函数，签名为 (session, old_status, new_status) -> None
+        """
+        with self._lock:
+            if callback not in self._status_callbacks:
+                self._status_callbacks.append(callback)
+    
+    def unregister_status_callback(self, callback: StatusChangeCallback) -> bool:
+        """取消注册状态变更回调
+        
+        Args:
+            callback: 要取消的回调函数
+            
+        Returns:
+            是否成功取消
+        """
+        with self._lock:
+            if callback in self._status_callbacks:
+                self._status_callbacks.remove(callback)
+                return True
+            return False
+    
+    def _notify_status_change(
+        self,
+        session: ProcessSession,
+        old_status: ProcessStatus,
+        new_status: ProcessStatus
+    ) -> None:
+        """通知状态变更
+        
+        Args:
+            session: 会话对象
+            old_status: 旧状态
+            new_status: 新状态
+        """
+        # 记录状态历史
+        with session._lock:
+            session.status_history.append((time.time(), old_status, new_status))
+        
+        # 调用回调
+        with self._lock:
+            callbacks = list(self._status_callbacks)
+        
+        for callback in callbacks:
+            try:
+                callback(session, old_status, new_status)
+            except Exception:
+                # 忽略回调异常，避免影响其他回调
+                pass
+    
+    def get_session_status(self, session_id: str) -> Optional[ProcessStatus]:
+        """获取会话状态
+        
+        Args:
+            session_id: 会话 ID
+            
+        Returns:
+            进程状态，如果会话不存在则返回 None
+        """
+        # 先检查运行中的会话
+        session = self.get_session(session_id)
+        if session:
+            # 主动检查进程状态
+            self.check_session_status(session)
+            return session.status
+        
+        # 再检查已完成的会话
+        finished = self.get_finished_session(session_id)
+        if finished:
+            return finished.status
+        
+        return None
+    
+    def check_session_status(self, session: ProcessSession) -> ProcessStatus:
+        """检查并更新会话状态
+        
+        主动轮询进程状态，如果状态发生变化则更新并通知。
+        
+        Args:
+            session: 会话对象
+            
+        Returns:
+            当前进程状态
+        """
+        with session._lock:
+            old_status = session.status
+            session.last_status_check = time.time()
+            
+            # 如果已经不是运行状态，直接返回
+            if old_status != ProcessStatus.RUNNING:
+                return old_status
+            
+            # 检查进程是否存在
+            if not session.process:
+                session.status = ProcessStatus.UNKNOWN
+                new_status = ProcessStatus.UNKNOWN
+            else:
+                # 检查进程是否已退出
+                poll_result = session.process.poll()
+                if poll_result is not None:
+                    # 进程已退出
+                    session.exit_code = poll_result
+                    if poll_result == 0:
+                        session.status = ProcessStatus.COMPLETED
+                    elif poll_result < 0:
+                        # 负数表示被信号终止
+                        session.status = ProcessStatus.KILLED
+                    else:
+                        session.status = ProcessStatus.FAILED
+                    new_status = session.status
+                else:
+                    # 进程仍在运行
+                    new_status = ProcessStatus.RUNNING
+        
+        # 如果状态发生变化，通知回调
+        if old_status != new_status:
+            self._notify_status_change(session, old_status, new_status)
+            
+            # 如果进程已结束，移动到已完成列表
+            if new_status != ProcessStatus.RUNNING:
+                self._move_to_finished(session, new_status)
+        
+        return new_status
+    
+    def check_all_sessions_status(self) -> Dict[str, ProcessStatus]:
+        """检查所有运行中会话的状态
+        
+        Returns:
+            会话 ID 到状态的映射
+        """
+        with self._lock:
+            sessions = list(self._running_sessions.values())
+        
+        results = {}
+        for session in sessions:
+            results[session.id] = self.check_session_status(session)
+        
+        return results
+    
+    def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """获取会话详细信息
+        
+        Args:
+            session_id: 会话 ID
+            
+        Returns:
+            会话信息字典，如果会话不存在则返回 None
+        """
+        # 先检查运行中的会话
+        session = self.get_session(session_id)
+        if session:
+            # 主动检查状态
+            self.check_session_status(session)
+            
+            with session._lock:
+                return {
+                    "id": session.id,
+                    "command": session.command,
+                    "cwd": session.cwd,
+                    "pid": session.pid,
+                    "status": session.status.value,
+                    "exit_code": session.exit_code,
+                    "started_at": session.started_at,
+                    "runtime_ms": int((time.time() - session.started_at) * 1000),
+                    "backgrounded": session.backgrounded,
+                    "truncated": session.truncated,
+                    "output_length": len(session.aggregated_output),
+                    "last_status_check": session.last_status_check,
+                    "status_history": [
+                        {
+                            "timestamp": ts,
+                            "old_status": old.value,
+                            "new_status": new.value
+                        }
+                        for ts, old, new in session.status_history
+                    ],
+                    "is_running": True
+                }
+        
+        # 再检查已完成的会话
+        finished = self.get_finished_session(session_id)
+        if finished:
+            return {
+                "id": finished.id,
+                "command": finished.command,
+                "cwd": finished.cwd,
+                "pid": None,
+                "status": finished.status.value,
+                "exit_code": finished.exit_code,
+                "started_at": finished.started_at,
+                "ended_at": finished.ended_at,
+                "runtime_ms": int((finished.ended_at - finished.started_at) * 1000),
+                "backgrounded": True,
+                "truncated": finished.truncated,
+                "output_length": len(finished.aggregated_output),
+                "is_running": False
+            }
+        
+        return None
+    
+    def start_status_monitor(self) -> None:
+        """启动状态监控线程
+        
+        定期检查所有运行中进程的状态，自动检测已退出的进程。
+        """
+        if self._status_monitor_thread and self._status_monitor_thread.is_alive():
+            return
+        
+        self._status_monitor_stop_event.clear()
+        self._status_monitor_thread = threading.Thread(
+            target=self._status_monitor_loop,
+            daemon=True
+        )
+        self._status_monitor_thread.start()
+    
+    def stop_status_monitor(self) -> None:
+        """停止状态监控线程"""
+        self._status_monitor_stop_event.set()
+        if self._status_monitor_thread:
+            self._status_monitor_thread.join(timeout=2)
+            self._status_monitor_thread = None
+    
+    def _status_monitor_loop(self) -> None:
+        """状态监控线程主循环"""
+        interval = self.STATUS_CHECK_INTERVAL_MS / 1000  # 转换为秒
+        while not self._status_monitor_stop_event.wait(interval):
+            self.check_all_sessions_status()
+    
+    def get_sessions_by_status(self, status: ProcessStatus) -> List[str]:
+        """按状态获取会话 ID 列表
+        
+        Args:
+            status: 要查询的状态
+            
+        Returns:
+            符合条件的会话 ID 列表
+        """
+        result = []
+        
+        with self._lock:
+            # 检查运行中的会话
+            for session_id, session in self._running_sessions.items():
+                if session.status == status:
+                    result.append(session_id)
+            
+            # 检查已完成的会话
+            for session_id, session in self._finished_sessions.items():
+                if session.status == status:
+                    result.append(session_id)
+        
+        return result
+    
+    def get_all_session_ids(self) -> Dict[str, str]:
+        """获取所有会话 ID 及其状态
+        
+        Returns:
+            会话 ID 到状态值的映射
+        """
+        result = {}
+        
+        with self._lock:
+            for session_id, session in self._running_sessions.items():
+                result[session_id] = session.status.value
+            
+            for session_id, session in self._finished_sessions.items():
+                result[session_id] = session.status.value
+        
+        return result
+    
+    # ==================== 原有方法 ====================
     
     def create_session(
         self,
@@ -407,9 +704,11 @@ class ProcessRegistry:
     def reset_for_tests(self) -> None:
         """重置注册表（用于测试）"""
         self._stop_sweeper()
+        self.stop_status_monitor()
         with self._lock:
             self._running_sessions.clear()
             self._finished_sessions.clear()
+            self._status_callbacks.clear()
 
 
 # 全局进程注册表实例
