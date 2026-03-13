@@ -134,6 +134,11 @@ class WebSearchConfig(BaseModel):
     bing: BingSearchConfig = Field(default_factory=BingSearchConfig)
 
 
+class MCPConfig(BaseModel):
+    """MCP (Model Context Protocol) configuration."""
+    timeout: int = 30
+
+
 class Settings(BaseSettings):
     """Global application settings."""
     chat_llm: ChatLLMConfig = Field(default_factory=ChatLLMConfig)
@@ -141,6 +146,7 @@ class Settings(BaseSettings):
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     tool_policy: ToolPolicyConfig = Field(default_factory=ToolPolicyConfig)
     fs_policy: FSPolicyConfig = Field(default_factory=FSPolicyConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
     app_name: str = "Kaiwu"
 
     @classmethod
