@@ -56,6 +56,7 @@ class ToolPolicyConfig(BaseModel):
         allow: 白名单 - 只允许这些工具（空数组=未启用，支持分组如 group:fs）
         deny: 黑名单 - 禁止这些工具（空数组=未启用）
         owner_only: 仅所有者可用的工具列表
+        plugin_dirs: 额外的插件目录列表（支持动态加载工具）
     
     优先级规则（从高到低）:
     1. deny (黑名单) - 最高优先级，无论其他规则如何，黑名单中的工具一定被禁止
@@ -72,7 +73,8 @@ class ToolPolicyConfig(BaseModel):
     {
       "tool_policy": {
         "allow": ["file_read", "file_write", "bash_exec"],
-        "deny": ["bash_exec"]
+        "deny": ["bash_exec"],
+        "plugin_dirs": ["~/.kaiwu/plugins", "./custom_tools"]
       }
     }
     ```
@@ -89,6 +91,7 @@ class ToolPolicyConfig(BaseModel):
     allow: List[str] = Field(default_factory=list)  # 空数组=未启用白名单
     deny: List[str] = Field(default_factory=list)   # 空数组=未启用黑名单
     owner_only: List[str] = Field(default_factory=list)
+    plugin_dirs: List[str] = Field(default_factory=list)  # 额外的插件目录
 
 
 class LLMApiConfig(BaseModel):
@@ -252,3 +255,18 @@ class Settings(BaseSettings):
             write_allowed_paths=config.write_allowed_paths if config.write_allowed_paths else None,
             write_denied_paths=config.write_denied_paths if config.write_denied_paths else None,
         )
+
+    def get_plugin_dirs(self) -> List[Path]:
+        """获取配置的插件目录列表
+        
+        支持路径扩展（~, 环境变量等）。
+        
+        Returns:
+            插件目录 Path 列表
+        """
+        dirs = []
+        for dir_str in self.tool_policy.plugin_dirs:
+            # 扩展 ~ 和环境变量
+            expanded = Path(dir_str).expanduser()
+            dirs.append(expanded)
+        return dirs
