@@ -205,7 +205,7 @@ class Settings(BaseSettings):
         Returns:
             配置的 ToolPolicy 实例
         """
-        from tools.policy import ToolPolicy, TOOL_PROFILES
+        from tools.tool_policy import ToolPolicy, TOOL_PROFILES
         
         config = self.tool_policy
         
