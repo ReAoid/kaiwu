@@ -10,6 +10,14 @@ from .types import (
 from .loader import SkillLoader
 from .prompt_builder import SkillPromptBuilder
 from .installer import SkillInstaller, get_installer
+from .package_manager import (
+    BinaryInfo,
+    PackageInfo,
+    PackageManager,
+    PackageManagerInfo,
+    PackageManagerType,
+    get_package_manager,
+)
 
 __all__ = [
     "InstallKind",
@@ -21,4 +29,11 @@ __all__ = [
     "SkillPromptBuilder",
     "SkillInstaller",
     "get_installer",
+    # Package manager
+    "BinaryInfo",
+    "PackageInfo",
+    "PackageManager",
+    "PackageManagerInfo",
+    "PackageManagerType",
+    "get_package_manager",
 ]
